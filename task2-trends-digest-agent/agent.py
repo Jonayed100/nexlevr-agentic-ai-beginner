@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -149,14 +150,34 @@ def call_model(messages: list) -> dict:
             "User-Agent": USER_AGENT,
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response:
-            reply = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        sys.exit(f"API error {error.code}: {error.read().decode('utf-8', errors='replace')}")
-    except urllib.error.URLError as error:
-        sys.exit(f"Could not reach {BASE_URL}: {error.reason}")
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8", errors="replace")
+            # Busy or rate-limited: wait a little and try again (3 tries in total).
+            if error.code in (429, 500, 502, 503) and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            sys.exit(f"API error {error.code}: {details}")
+        except urllib.error.URLError as error:
+            sys.exit(f"Could not reach {BASE_URL}: {error.reason}")
     return reply["choices"][0]["message"]
+
+
+def assistant_turn(message: dict) -> dict:
+    """Keep only the standard fields of the model's reply.
+
+    Some providers add extra fields to the reply and then reject them when
+    the reply is sent back as history, so we store only the standard ones.
+    """
+    return {
+        "role": "assistant",
+        "content": message.get("content"),
+        "tool_calls": message.get("tool_calls"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -167,13 +188,27 @@ def run_agent(industry: str) -> str:
         {"role": "system", "content": build_system_prompt(industry)},
         {"role": "user", "content": f"Write today's {industry} trends digest."},
     ]
+    reminded = False
     for _ in range(MAX_TURNS):
         message = call_model(messages)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
-            return (message.get("content") or "").strip()
+            answer = (message.get("content") or "").strip()
+            # If the model answered without reading any feed, remind it once.
+            if not SEEN_LINKS and not reminded:
+                reminded = True
+                messages.append({"role": "assistant", "content": answer})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "You have not read any source yet. Call "
+                        "fetch_feed for each source first, then write the digest.",
+                    }
+                )
+                continue
+            return answer
 
-        messages.append(message)
+        messages.append(assistant_turn(message))
         for call in tool_calls:
             try:
                 arguments = json.loads(call["function"]["arguments"] or "{}")

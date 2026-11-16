@@ -14,6 +14,7 @@ Run:
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -106,15 +107,34 @@ def call_model(messages: list) -> dict:
             "User-Agent": "first-tool-agent/1.0",
         },
     )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            reply = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as error:
-        details = error.read().decode("utf-8", errors="replace")
-        sys.exit(f"API error {error.code}: {details}")
-    except urllib.error.URLError as error:
-        sys.exit(f"Could not reach {BASE_URL}: {error.reason}")
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as error:
+            details = error.read().decode("utf-8", errors="replace")
+            # Busy or rate-limited: wait a little and try again (3 tries in total).
+            if error.code in (429, 500, 502, 503) and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            sys.exit(f"API error {error.code}: {details}")
+        except urllib.error.URLError as error:
+            sys.exit(f"Could not reach {BASE_URL}: {error.reason}")
     return reply["choices"][0]["message"]
+
+
+def assistant_turn(message: dict) -> dict:
+    """Keep only the standard fields of the model's reply.
+
+    Some providers add extra fields to the reply and then reject them when
+    the reply is sent back as history, so we store only the standard ones.
+    """
+    return {
+        "role": "assistant",
+        "content": message.get("content"),
+        "tool_calls": message.get("tool_calls"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +160,7 @@ def run_agent(question: str) -> str:
             return answer
 
         # STEP 5 - The model asked for a tool. Keep its request in history.
-        messages.append(message)
+        messages.append(assistant_turn(message))
 
         for call in tool_calls:
             name = call["function"]["name"]
