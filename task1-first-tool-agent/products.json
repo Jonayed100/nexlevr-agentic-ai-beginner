@@ -1,0 +1,11 @@
+{
+  "currency": "BDT",
+  "products": [
+    {"name": "Wireless Mouse", "price": 850, "in_stock": true},
+    {"name": "Mechanical Keyboard", "price": 3200, "in_stock": true},
+    {"name": "USB-C Cable", "price": 350, "in_stock": true},
+    {"name": "Laptop Stand", "price": 1450, "in_stock": false},
+    {"name": "Webcam", "price": 2600, "in_stock": true},
+    {"name": "Headphones", "price": 1900, "in_stock": true}
+  ]
+}
